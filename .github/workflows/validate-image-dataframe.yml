@@ -1,0 +1,64 @@
+name: Validate image DataFrame logging candidate
+
+on:
+  push:
+    branches: [codex/validate-log-table-dataframe]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  targeted-validation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 18
+    env:
+      UV_NO_SYNC: "1"
+      NO_FIX: "true"
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: f9ae18cfd19014b94fa713e3b3753a6310197049
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
+        with:
+          version: "0.12.19"
+          enable-cache: false
+      - name: Install locked CPU test and lint environment
+        run: uv sync --locked --no-default-groups --group pytest --group lint --python 3.10
+      - name: Prove regression fails against the unchanged production file
+        shell: bash
+        run: |
+          cp mlflow/tracking/client.py "$RUNNER_TEMP/fixed-client.py"
+          git show e9068d8a7f29ab70bb385ea1408535888166fc8d:mlflow/tracking/client.py > mlflow/tracking/client.py
+          set +e
+          uv run --no-sync pytest tests/tracking/test_tracking.py -k image_dataframe_reused -q --junitxml="$RUNNER_TEMP/baseline.xml" > "$RUNNER_TEMP/baseline.log" 2>&1
+          result=$?
+          set -e
+          cp "$RUNNER_TEMP/fixed-client.py" mlflow/tracking/client.py
+          tail -n 25 "$RUNNER_TEMP/baseline.log"
+          test "$result" -eq 1
+          uv run --no-sync python - <<'PY'
+          import os
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          suite = ET.parse(Path(os.environ["RUNNER_TEMP"]) / "baseline.xml").getroot().find("testsuite")
+          assert suite.attrib["tests"] == "4", suite.attrib
+          assert suite.attrib["failures"] == "4", suite.attrib
+          assert suite.attrib["errors"] == "0", suite.attrib
+          failures = suite.findall("testcase/failure")
+          assert len(failures) == 4
+          assert all("Failed to download artifacts" in failure.attrib["message"] for failure in failures)
+          print("Confirmed four missing-image regression failures against unchanged production code")
+          PY
+      - name: Run fixed table regressions and existing table tests
+        run: uv run --no-sync pytest tests/tracking/test_tracking.py -k table -q
+      - name: Compile changed Python files
+        run: uv run --no-sync python -m py_compile mlflow/tracking/client.py tests/tracking/test_tracking.py
+      - name: Run pre-commit checks for the changed files
+        run: uv run --no-sync pre-commit run --files mlflow/tracking/client.py tests/tracking/test_tracking.py
+      - name: Confirm validation did not modify tracked files
+        run: git diff --exit-code
