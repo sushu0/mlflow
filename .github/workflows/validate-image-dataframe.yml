@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   targeted-validation:
     runs-on: ubuntu-24.04
@@ -17,17 +21,17 @@ jobs:
       NO_FIX: "true"
       PYTHONUTF8: "1"
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: f9ae18cfd19014b94fa713e3b3753a6310197049
           fetch-depth: 2
           persist-credentials: false
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version: "0.12.19"
           enable-cache: false
       - name: Install locked CPU test and lint environment
-        run: uv sync --locked --no-default-groups --group pytest --group lint --python 3.10
+        run: uv sync --locked --no-default-groups --group pytest --group lint --group build --python 3.10
       - name: Prove regression fails against the unchanged production file
         shell: bash
         run: |
@@ -38,7 +42,7 @@ jobs:
           result=$?
           set -e
           cp "$RUNNER_TEMP/fixed-client.py" mlflow/tracking/client.py
-          tail -n 25 "$RUNNER_TEMP/baseline.log"
+          cat "$RUNNER_TEMP/baseline.log"
           test "$result" -eq 1
           uv run --no-sync python - <<'PY'
           import os
